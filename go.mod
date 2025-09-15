@@ -2,7 +2,10 @@ module github.com/Thiagojm/rng_cli_linux
 
 go 1.24.0
 
-require go.bug.st/serial v1.6.4
+require (
+	github.com/google/gousb v1.1.3
+	go.bug.st/serial v1.6.4
+)
 
 require (
 	github.com/creack/goselect v0.1.2 // indirect

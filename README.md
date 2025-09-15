@@ -7,11 +7,13 @@ Random data collection CLI in Go for Linux systems.
 This is a Linux port of the `rng_go_cli` project, originally designed for Windows. It provides random data collection from multiple sources:
 - **Pseudorandom (software)**: High-quality software-based random generation
 - **TrueRNG (hardware)**: USB-based true random number generator
+- **BitBabbler (hardware)**: FTDI-based USB true-random device, using libusb on Linux
 
 ## Features
 
 - **Pseudorandom generation**: Uses Go's `crypto/rand` and `math/rand` for high-quality pseudorandom data
 - **TrueRNG hardware support**: USB-based true random number generator detection and reading
+- **BitBabbler hardware support (Linux)**: Detection via libusb (gousb) and bulk-EP reads, with serial fallback where applicable
 - **Flexible output**: Generate random bits in various sizes
 - **Interval collection**: Collect data continuously at specified intervals
 - **Deterministic generator**: Create reproducible random streams with seeded generators
@@ -21,6 +23,16 @@ This is a Linux port of the `rng_go_cli` project, originally designed for Window
 
 - Go 1.24.0 or later
 - Linux operating system
+- For BitBabbler (libusb path) build/run on Linux:
+  - `libusb-1.0-0-dev`
+  - `build-essential` (GCC, make)
+  - `pkg-config`
+
+Install build prerequisites on Debian/Ubuntu:
+```bash
+sudo apt-get update
+sudo apt-get install -y libusb-1.0-0-dev build-essential pkg-config
+```
 
 ## Installation
 
@@ -30,6 +42,28 @@ This is a Linux port of the `rng_go_cli` project, originally designed for Window
    ```bash
    go mod tidy
    ```
+
+## Device Setup (Linux)
+
+### TrueRNG
+- Ensure your user has serial access: `sudo usermod -a -G dialout $USER`
+- Replug device or log out/in after adding to the group
+
+### BitBabbler
+- Install udev rules and sysctl settings (provided in this repo):
+  ```bash
+  sudo ./setup_bitbabbler_linux.sh
+  ```
+- Add your user to the device group and replug:
+  ```bash
+  sudo usermod -aG bit-babbler $USER
+  newgrp bit-babbler
+  # unplug/replug the BitBabbler device
+  ```
+- If detection fails due to permissions, test with sudo:
+  ```bash
+  sudo -E CGO_ENABLED=1 go run ./cmd/bbdetect
+  ```
 
 ## Usage
 
@@ -114,7 +148,26 @@ go run ./cmd/trngcli -bits 1024 -interval 1s -mode unwhitened
 # Press Ctrl+C to stop continuous collection
 ```
 
-### API Usage
+### BitBabbler CLI (Linux)
+
+BitBabbler uses libusb for detection and bulk reads on Linux.
+
+```bash
+# Build the CLIs with CGO enabled (required for libusb)
+CGO_ENABLED=1 go build -o bbdetect ./cmd/bbdetect
+CGO_ENABLED=1 go build -o bb ./cmd/bb
+
+# Detect BitBabbler device
+./bbdetect
+
+# Read 1024 bits every second
+./bb -bits 1024 -interval 1s
+```
+
+#### Notes
+- If detection works only with sudo, it’s a permission issue. Ensure you’ve run `setup_bitbabbler_linux.sh` and added your user to `bit-babbler` group, then replug the device.
+
+## API Usage
 
 #### Basic pseudorandom generation:
 ```go
@@ -173,31 +226,42 @@ if err != nil {
     log.Fatal(err)
 }
 fmt.Printf("Found %s on %s\n", device.Model.String(), device.Port)
+```
 
-// List all devices
-devices, err := truerng.EnumerateDevices()
-for _, dev := range devices {
-    fmt.Printf("%s: %s on %s\n", dev.Model.String(), dev.Name, dev.Port)
-}
+#### BitBabbler hardware access (Linux):
+```go
+import "github.com/Thiagojm/rng_cli_linux/bbusb"
 
-// Read true random bits with different modes
-data, err := truerng.ReadBits(2048)  // Default normal mode
+// Detect BitBabbler device (VID 0x0403, PID 0x7840)
+present, err := bbusb.Detect()
 if err != nil {
     log.Fatal(err)
 }
+if !present {
+    log.Fatal("BitBabbler device not found")
+}
 
-// Read with specific capture mode
-rawData, err := truerng.ReadBitsWithMode(2048, truerng.ModeRawBin)
+// Get detailed device information
+device, err := bbusb.FindDevice()
 if err != nil {
     log.Fatal(err)
 }
+fmt.Printf("Found %s (%s)\n", device.FriendlyName, device.DevicePath)
 
-// Continuous collection with mode
-ctx := context.Background()
-err = truerng.CollectBitsAtIntervalWithMode(ctx, 1024, 1*time.Second, truerng.ModeUnwhitened, func(b []byte) {
-    // Process each batch of true random data
-    fmt.Printf("Received %d bytes of true random data\n", len(b))
-})
+// Open device and read random data
+session, err := bbusb.OpenBitBabbler(2500000, 1)
+if err != nil {
+    log.Fatal(err)
+}
+defer session.Close()
+
+// Read random bytes
+buf := make([]byte, 1024)
+n, err := session.ReadRandom(buf)
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Printf("Read %d bytes of random data\n", n)
 ```
 
 ## Project Structure
@@ -206,9 +270,12 @@ err = truerng.CollectBitsAtIntervalWithMode(ctx, 1024, 1*time.Second, truerng.Mo
 rng_cli_linux/
 ├── cmd/
 │   ├── pseudocli/          # Pseudorandom CLI demo
-│   └── trngcli/            # TrueRNG CLI demo
+│   ├── trngcli/            # TrueRNG CLI demo
+│   ├── bb/                 # BitBabbler data collection CLI
+│   └── bbdetect/           # BitBabbler device detection CLI
 ├── pseudorng/              # Pseudorandom number generation package
 ├── truerng/                # TrueRNG hardware access package
+├── bbusb/                  # BitBabbler hardware access package
 ├── naming/                 # Filename convention helpers
 ├── data/                   # Output directory for generated files
 ├── go.mod                  # Go module definition
@@ -219,15 +286,13 @@ rng_cli_linux/
 
 - **Cross-platform serial support**: Uses `go.bug.st/serial` for Linux serial port access
 - **Linux device paths**: Detects TrueRNG devices on `/dev/ttyUSB*` and `/dev/ttyACM*` paths
-- **Linux permissions**: Includes setup instructions for serial port access
+- **BitBabbler (Linux)**: Uses libusb (gousb) to detect/read via bulk endpoints. No long-running daemon is used.
+- **Linux permissions**: Includes setup instructions for proper udev rules and group permissions
 - **Module name**: Updated to `github.com/Thiagojm/rng_cli_linux`
-- **Hardware support**: Maintains TrueRNG hardware support with Linux adaptations
-- **Build process**: Linux-native compilation and execution
+- **Build process**: CGO required for BitBabbler libusb path
 
 ## Future Enhancements
 
-This Linux version can be extended to include:
-- BitBabbler USB hardware support (currently Windows-only in original)
 - Additional CLI commands for data analysis
 - File output capabilities (.bin and .csv formats)
 - Statistical analysis tools for randomness testing
