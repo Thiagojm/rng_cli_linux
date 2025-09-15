@@ -45,29 +45,68 @@ sudo apt-get install -y libusb-1.0-0-dev build-essential pkg-config
 
 ## Device Setup (Linux)
 
-### TrueRNG
-- Ensure your user has serial access: `sudo usermod -a -G dialout $USER`
-- Replug device or log out/in after adding to the group
+### Quick setup (recommended)
 
-### BitBabbler
-- Install udev rules and sysctl settings (provided in this repo):
+Run the unified script to install rules for both devices, create groups, and apply settings:
+
+```bash
+sudo ./setup_rng_devices_linux.sh
+# then refresh group membership in this shell (optional)
+exec su - $USER
+```
+
+What this script does:
+- Installs BitBabbler udev rules to `/etc/udev/rules.d/60-bit-babbler.rules`
+- Installs BitBabbler sysctl config to `/etc/sysctl.d/bit-babbler-sysctl.conf` (applied immediately)
+- Installs TrueRNG udev rules to `/etc/udev/rules.d/99-TrueRNG.rules`
+- Ensures `bit-babbler` group exists and adds your user
+- Reloads and triggers udev so rules take effect
+
+Notes:
+- Replug devices if they are not detected immediately after running the script
+- The provided TrueRNG rules set `MODE=0666`, so `dialout` membership is not required
+- If you prefer not to install the TrueRNG rules, add your user to `dialout` instead: `sudo usermod -aG dialout $USER`
+
+### Manual setup (alternative)
+
+If you want to configure devices separately:
+
+- TrueRNG: either install the udev rules from `installers/truerng/udev_rules/99-TrueRNG.rules` (sets `MODE=0666`), or add your user to `dialout` and relogin.
+- BitBabbler: run the vendor-based setup for udev rules and sysctl:
   ```bash
   sudo ./setup_bitbabbler_linux.sh
-  ```
-- Add your user to the device group and replug:
-  ```bash
   sudo usermod -aG bit-babbler $USER
-  newgrp bit-babbler
-  # unplug/replug the BitBabbler device
+  # relogin or: exec su - $USER
   ```
-- If detection fails due to permissions, test with sudo:
+  If detection still fails due to permissions, you can test with:
   ```bash
   sudo -E CGO_ENABLED=1 go run ./cmd/bbdetect
   ```
 
-## Usage
+## Unified Collector CLI
 
-### Pseudorandom CLI
+The `collect` command mirrors the Windows `collect` tool and supports `pseudo`, `trng`, and `bitb`.
+
+Build:
+```bash
+# Pseudorng/TrueRNG only
+go build -o collect ./cmd/collect
+# Include BitBabbler (requires CGO/libusb)
+CGO_ENABLED=1 go build -o collect ./cmd/collect
+```
+
+Usage:
+```bash
+./collect -device pseudo -bits 2048 -interval 1 -outdir data
+./collect -device trng   -bits 2048 -interval 1 -outdir data
+CGO_ENABLED=1 ./collect -device bitb   -bits 2048 -interval 1 -outdir data
+```
+
+Output:
+- Writes raw bytes to `.bin` and a CSV line per sample with the count of ones
+- Filenames are constructed via `naming` to include device, bit size, and interval
+
+## Pseudorandom CLI
 
 The `pseudocli` command provides a simple interface to test pseudorandom generation:
 
@@ -82,24 +121,7 @@ go build -o pseudocli ./cmd/pseudocli
 ./pseudocli -bits 512 -interval 2s
 ```
 
-#### Flags:
-- `-bits` (int): Number of bits to read per batch (default: 1024)
-- `-interval` (duration): Interval between reads (e.g., 2s, 500ms). Use 0 for one-shot mode (default: 0)
-
-#### Examples:
-
-```bash
-# One-shot 2048 bits
-go run ./cmd/pseudocli -bits 2048
-
-# Continuous collection every 1 second
-go run ./cmd/pseudocli -bits 1024 -interval 1s
-# Press Ctrl+C to stop continuous collection
-```
-
-### TrueRNG CLI
-
-The `trngcli` command works with TrueRNG USB hardware devices with enhanced features:
+## TrueRNG CLI
 
 ```bash
 # Build the CLI
@@ -108,52 +130,14 @@ go build -o trngcli ./cmd/trngcli
 # List all detected TrueRNG devices
 ./trngcli -list
 
-# Generate 1024 true random bits (one-shot)
+# One-shot collection
 ./trngcli -bits 1024
-
-# Generate with different capture modes
-./trngcli -bits 1024 -mode raw_bin
-./trngcli -bits 1024 -mode unwhitened
-
-# Generate 512 true random bits every 2 seconds (continuous)
-./trngcli -bits 512 -interval 2s
 ```
 
-#### TrueRNG Setup:
-- Connect your TrueRNG USB device
-- Ensure your user has serial port access: `sudo usermod -a -G dialout $USER`
-- The CLI automatically detects TrueRNG, TrueRNGpro, and TrueRNGproV2 devices
-
-#### Supported Capture Modes:
-- `normal` - Combined streams + Mersenne Twister (default, 300 baud)
-- `raw_bin` - Raw ADC samples in binary (19200 baud)
-- `raw_asc` - Raw ADC samples in ASCII (38400 baud)
-- `unwhitened` - Unwhitened RNG1-RNG2 (57600 baud, TrueRNGproV2 only)
-- `psdebug`, `rngdebug`, `rng1white`, `rng2white`, `normal_asc`, `normal_asc_slow`
-
-#### Examples:
+## BitBabbler CLI (Linux)
 
 ```bash
-# List available devices
-go run ./cmd/trngcli -list
-
-# One-shot 2048 true random bits
-go run ./cmd/trngcli -bits 2048
-
-# Read raw ADC samples
-go run ./cmd/trngcli -bits 2048 -mode raw_bin
-
-# Continuous collection every 1 second with specific mode
-go run ./cmd/trngcli -bits 1024 -interval 1s -mode unwhitened
-# Press Ctrl+C to stop continuous collection
-```
-
-### BitBabbler CLI (Linux)
-
-BitBabbler uses libusb for detection and bulk reads on Linux.
-
-```bash
-# Build the CLIs with CGO enabled (required for libusb)
+# Build (requires CGO)
 CGO_ENABLED=1 go build -o bbdetect ./cmd/bbdetect
 CGO_ENABLED=1 go build -o bb ./cmd/bb
 
@@ -164,105 +148,9 @@ CGO_ENABLED=1 go build -o bb ./cmd/bb
 ./bb -bits 1024 -interval 1s
 ```
 
-#### Notes
-- If detection works only with sudo, it’s a permission issue. Ensure you’ve run `setup_bitbabbler_linux.sh` and added your user to `bit-babbler` group, then replug the device.
-
 ## API Usage
 
-#### Basic pseudorandom generation:
-```go
-import "github.com/Thiagojm/rng_cli_linux/pseudorng"
-
-// Generate random bits
-data, err := pseudorng.ReadBits(2048)
-if err != nil {
-    log.Fatal(err)
-}
-```
-
-#### Continuous collection:
-```go
-import (
-    "context"
-    "time"
-    "github.com/Thiagojm/rng_cli_linux/pseudorng"
-)
-
-ctx := context.Background()
-err := pseudorng.CollectBitsAtInterval(ctx, 1024, 1*time.Second, func(batch []byte) {
-    // Process each batch
-    fmt.Printf("Received %d bytes\n", len(batch))
-})
-```
-
-#### Deterministic generator:
-```go
-// Create a seeded generator for reproducible results
-gen, err := pseudorng.NewGenerator(12345)
-if err != nil {
-    log.Fatal(err)
-}
-
-data, err := gen.ReadBits(512)
-// Use the same seed to get identical results
-```
-
-#### TrueRNG hardware access:
-```go
-import "github.com/Thiagojm/rng_cli_linux/truerng"
-
-// Detect TrueRNG device
-present, err := truerng.Detect()
-if err != nil {
-    log.Fatal(err)
-}
-if !present {
-    log.Fatal("TrueRNG device not found")
-}
-
-// Get detailed device information
-device, err := truerng.FindDevice()
-if err != nil {
-    log.Fatal(err)
-}
-fmt.Printf("Found %s on %s\n", device.Model.String(), device.Port)
-```
-
-#### BitBabbler hardware access (Linux):
-```go
-import "github.com/Thiagojm/rng_cli_linux/bbusb"
-
-// Detect BitBabbler device (VID 0x0403, PID 0x7840)
-present, err := bbusb.Detect()
-if err != nil {
-    log.Fatal(err)
-}
-if !present {
-    log.Fatal("BitBabbler device not found")
-}
-
-// Get detailed device information
-device, err := bbusb.FindDevice()
-if err != nil {
-    log.Fatal(err)
-}
-fmt.Printf("Found %s (%s)\n", device.FriendlyName, device.DevicePath)
-
-// Open device and read random data
-session, err := bbusb.OpenBitBabbler(2500000, 1)
-if err != nil {
-    log.Fatal(err)
-}
-defer session.Close()
-
-// Read random bytes
-buf := make([]byte, 1024)
-n, err := session.ReadRandom(buf)
-if err != nil {
-    log.Fatal(err)
-}
-fmt.Printf("Read %d bytes of random data\n", n)
-```
+See the README sections above for examples of pseudorng, truerng, and bbusb usage.
 
 ## Project Structure
 
@@ -272,7 +160,8 @@ rng_cli_linux/
 │   ├── pseudocli/          # Pseudorandom CLI demo
 │   ├── trngcli/            # TrueRNG CLI demo
 │   ├── bb/                 # BitBabbler data collection CLI
-│   └── bbdetect/           # BitBabbler device detection CLI
+│   ├── bbdetect/           # BitBabbler device detection CLI
+│   └── collect/            # Unified collector (pseudo|trng|bitb)
 ├── pseudorng/              # Pseudorandom number generation package
 ├── truerng/                # TrueRNG hardware access package
 ├── bbusb/                  # BitBabbler hardware access package
@@ -290,13 +179,6 @@ rng_cli_linux/
 - **Linux permissions**: Includes setup instructions for proper udev rules and group permissions
 - **Module name**: Updated to `github.com/Thiagojm/rng_cli_linux`
 - **Build process**: CGO required for BitBabbler libusb path
-
-## Future Enhancements
-
-- Additional CLI commands for data analysis
-- File output capabilities (.bin and .csv formats)
-- Statistical analysis tools for randomness testing
-- GUI applications for data collection
 
 ## License
 
