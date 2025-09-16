@@ -18,6 +18,7 @@ This is a Linux port of the `rng_go_cli` project, originally designed for Window
 - **Interval collection**: Collect data continuously at specified intervals
 - **Deterministic generator**: Create reproducible random streams with seeded generators
 - **Cross-platform serial support**: Automatic detection of TrueRNG devices on Linux serial ports
+- **Data analysis**: Convert collected data to Excel format with statistical analysis and charts
 
 ## Requirements
 
@@ -99,7 +100,7 @@ Usage:
 ```bash
 ./collect -device pseudo -bits 2048 -interval 1 -outdir data
 ./collect -device trng   -bits 2048 -interval 1 -outdir data
-CGO_ENABLED=1 ./collect -device bitb   -bits 2048 -interval 1 -outdir data
+CGO_ENABLED=1 ./collect -device bitb -bits 2048 -interval 1 -outdir data
 ```
 
 Output:
@@ -148,6 +149,33 @@ CGO_ENABLED=1 go build -o bb ./cmd/bb
 ./bb -bits 1024 -interval 1s
 ```
 
+## Data Analysis CLI
+
+The `filetoexcel` command converts collected data files to Excel format with statistical analysis:
+
+```bash
+# Build the CLI
+go build -o filetoexcel ./cmd/filetoexcel
+
+# Convert CSV data to Excel with z-score analysis
+./filetoexcel data/20250915T222739_bitb_s2048_i1.csv
+
+# Convert binary data to Excel with z-score analysis
+./filetoexcel data/20250915T222739_bitb_s2048_i1.bin
+```
+
+Features:
+- **Statistical analysis**: Calculates cumulative mean and z-scores for randomness testing
+- **Excel export**: Creates Excel files with data tables and line charts
+- **Multiple formats**: Supports both CSV and binary input files
+- **Automatic parsing**: Extracts sampling interval and bit count from filenames
+- **Time formatting**: Handles various timestamp formats for CSV files
+
+The generated Excel files contain:
+- Data table with samples/time, ones count, cumulative mean, and z-test values
+- Line chart visualizing z-score trends over time
+- Proper axis labels and titles based on the input data parameters
+
 ## API Usage
 
 See the README sections above for examples of pseudorng, truerng, and bbusb usage.
@@ -161,7 +189,8 @@ rng_cli_linux/
 │   ├── trngcli/            # TrueRNG CLI demo
 │   ├── bb/                 # BitBabbler data collection CLI
 │   ├── bbdetect/           # BitBabbler device detection CLI
-│   └── collect/            # Unified collector (pseudo|trng|bitb)
+│   ├── collect/            # Unified collector (pseudo|trng|bitb)
+│   └── filetoexcel/        # Data analysis and Excel export CLI
 ├── pseudorng/              # Pseudorandom number generation package
 ├── truerng/                # TrueRNG hardware access package
 ├── bbusb/                  # BitBabbler hardware access package
